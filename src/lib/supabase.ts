@@ -33,8 +33,9 @@ export interface Ocorrencia {
   resultado?: string
   tratativa?: string
   status: string
-  prazo_dias?: number
-  prioridade?: string
+  reincidencia?: string
+  nf_anterior?: string
+  nf_substituta?: string
 }
 
 export interface Cliente {

@@ -72,11 +72,15 @@ export const ocorrenciasApi = {
   },
 
   async create(ocorrencia: Ocorrencia) {
+    // Importar função helper para fuso horário do Brasil
+    const { getBrazilDateTimeISO } = await import('@/lib/utils')
+    const dataCriacao = getBrazilDateTimeISO()
+    
     const { data, error } = await supabase
       .from('ocorrencias')
       .insert([{
         ...ocorrencia,
-        data_criacao: new Date().toISOString(),
+        data_criacao: dataCriacao,
       }])
       .select()
       .single()

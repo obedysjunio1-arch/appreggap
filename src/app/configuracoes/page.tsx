@@ -35,10 +35,8 @@ import {
   Trash2,
   RefreshCw,
   Save,
-  Upload,
   FileSpreadsheet,
 } from 'lucide-react'
-import { importClientesFromExcel } from '@/lib/excel-import'
 
 interface Cliente {
   id?: string
@@ -213,66 +211,6 @@ export default function ConfiguracoesPage() {
     }
   }
 
-  const handleImportClientes = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
-      toast({
-        variant: 'destructive',
-        title: 'Formato inválido',
-        description: 'Por favor, selecione um arquivo Excel (.xlsx ou .xls)',
-      })
-      return
-    }
-
-    try {
-      setLoading(true)
-      const clientes = await importClientesFromExcel(file)
-
-      if (clientes.length === 0) {
-        toast({
-          variant: 'destructive',
-          title: 'Nenhum cliente encontrado',
-          description: 'O arquivo não contém clientes válidos.',
-        })
-        return
-      }
-
-      // Inserir clientes no banco
-      let successCount = 0
-      let errorCount = 0
-
-      for (const cliente of clientes) {
-        try {
-          await clientesApi.create(cliente)
-          successCount++
-        } catch (error) {
-          errorCount++
-          console.error('Erro ao inserir cliente:', cliente, error)
-        }
-      }
-
-      toast({
-        title: 'Importação concluída!',
-        description: `${successCount} cliente(s) importado(s) com sucesso. ${errorCount > 0 ? `${errorCount} erro(s).` : ''}`,
-      })
-
-      await loadAllData()
-
-      // Resetar input
-      event.target.value = ''
-    } catch (error) {
-      console.error('Erro ao importar:', error)
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao importar',
-        description: 'Não foi possível importar os clientes. Verifique o formato do arquivo.',
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const tabs = [
     { id: 'clientes' as TabType, label: 'Clientes', icon: '🏢' },
@@ -471,26 +409,6 @@ export default function ConfiguracoesPage() {
               </span>
             </CardTitle>
             <div className="flex gap-2">
-              {activeTab === 'clientes' && (
-                <>
-                  <input
-                    type="file"
-                    id="import-excel"
-                    accept=".xlsx,.xls"
-                    onChange={handleImportClientes}
-                    className="hidden"
-                    disabled={loading}
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={() => document.getElementById('import-excel')?.click()}
-                    disabled={loading}
-                  >
-                    <Upload className="w-4 h-4 mr-2" />
-                    Importar Excel
-                  </Button>
-                </>
-              )}
               <Button onClick={() => {
                 setEditingItem(null)
                 if (activeTab === 'clientes') {

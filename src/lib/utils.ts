@@ -3,6 +3,19 @@ import { twMerge } from "tailwind-merge"
 import { format } from "date-fns"
 import { ptBR } from "date-fns/locale"
 
+// Função helper para obter data/hora atual no fuso horário do Brasil (UTC-3)
+export function getBrazilDateTime(): Date {
+  const now = new Date()
+  // Converte para o fuso horário do Brasil
+  const brazilTimeString = now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })
+  return new Date(brazilTimeString)
+}
+
+// Função helper para converter data para ISO string no fuso do Brasil
+export function getBrazilDateTimeISO(): string {
+  return getBrazilDateTime().toISOString()
+}
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
@@ -17,8 +30,20 @@ export function formatCurrency(value: number): string {
   }).format(value || 0)
 }
 
-// Formatar data no padrão brasileiro
+// Formatar data no padrão brasileiro (DD/MM)
 export function formatDate(date: string | Date | null | undefined): string {
+  if (!date) return '-'
+  try {
+    const dateObj = typeof date === 'string' ? new Date(date) : date
+    if (isNaN(dateObj.getTime())) return '-'
+    return format(dateObj, 'dd/MM', { locale: ptBR })
+  } catch {
+    return '-'
+  }
+}
+
+// Formatar data completa (DD/MM/AAAA) quando necessário
+export function formatDateFull(date: string | Date | null | undefined): string {
   if (!date) return '-'
   try {
     const dateObj = typeof date === 'string' ? new Date(date) : date
@@ -51,21 +76,15 @@ export function calculateMTTR(ocorrencias: Array<{ status: string; data_ocorrenc
   return Math.round(soma / tempos.length)
 }
 
-// Calcular Taxa de Reincidência
-export function calculateRecurrenceRate(ocorrencias: Array<{ motivo: string; cliente?: string }>): number {
+// Calcular Taxa de Reincidência (razão entre registros com Reincidência = Sim / total de registros)
+export function calculateRecurrenceRate(ocorrencias: Array<{ reincidencia?: string }>): number {
   if (ocorrencias.length === 0) return 0
 
-  const ocorrenciasPorMotivoCliente = new Map<string, number>()
-  ocorrencias.forEach(o => {
-    const key = `${o.motivo}_${o.cliente || 'SEM_CLIENTE'}`
-    ocorrenciasPorMotivoCliente.set(key, (ocorrenciasPorMotivoCliente.get(key) || 0) + 1)
-  })
+  const totalRegistros = ocorrencias.length
+  const registrosComReincidencia = ocorrencias.filter(o => o.reincidencia === 'SIM').length
 
-  const reincidencias = Array.from(ocorrenciasPorMotivoCliente.values()).filter(count => count > 1).length
-  const total = ocorrenciasPorMotivoCliente.size
-
-  if (total === 0) return 0
-  return Math.round((reincidencias / total) * 100)
+  if (totalRegistros === 0) return 0
+  return Math.round((registrosComReincidencia / totalRegistros) * 100)
 }
 
 // Calcular Impacto Financeiro Total
@@ -79,4 +98,50 @@ export function getSLAStatus(dias: number): string {
   if (dias <= 3) return 'Alto'
   if (dias <= 7) return 'Médio'
   return 'Baixo'
+}
+
+// Calcular Comparativo Semanal (semana atual vs semana anterior)
+export function getWeekComparison(ocorrencias: Array<{ data_ocorrencia: string }>) {
+  const now = getBrazilDateTime()
+  
+  // Semana atual (segunda a domingo)
+  const inicioSemanaAtual = new Date(now)
+  inicioSemanaAtual.setDate(now.getDate() - now.getDay() + 1) // Segunda-feira
+  inicioSemanaAtual.setHours(0, 0, 0, 0)
+  
+  const fimSemanaAtual = new Date(inicioSemanaAtual)
+  fimSemanaAtual.setDate(inicioSemanaAtual.getDate() + 6) // Domingo
+  fimSemanaAtual.setHours(23, 59, 59, 999)
+  
+  // Semana anterior
+  const inicioSemanaAnterior = new Date(inicioSemanaAtual)
+  inicioSemanaAnterior.setDate(inicioSemanaAtual.getDate() - 7)
+  
+  const fimSemanaAnterior = new Date(fimSemanaAtual)
+  fimSemanaAnterior.setDate(fimSemanaAtual.getDate() - 7)
+  
+  const semanaAtual = ocorrencias.filter(o => {
+    if (!o.data_ocorrencia) return false
+    const data = new Date(o.data_ocorrencia)
+    return data >= inicioSemanaAtual && data <= fimSemanaAtual
+  }).length
+  
+  const semanaAnterior = ocorrencias.filter(o => {
+    if (!o.data_ocorrencia) return false
+    const data = new Date(o.data_ocorrencia)
+    return data >= inicioSemanaAnterior && data <= fimSemanaAnterior
+  }).length
+  
+  const diferenca = semanaAtual - semanaAnterior
+  const percentual = semanaAnterior > 0 
+    ? Math.round((diferenca / semanaAnterior) * 100) 
+    : (semanaAtual > 0 ? 100 : 0)
+  
+  return {
+    semanaAtual,
+    semanaAnterior,
+    diferenca,
+    percentual,
+    isPositive: diferenca >= 0
+  }
 }

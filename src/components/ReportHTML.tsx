@@ -18,7 +18,7 @@ import {
   Legend,
 } from 'recharts'
 import { Ocorrencia } from '@/lib/supabase'
-import { formatCurrency, calculateMTTR, calculateRecurrenceRate, calculateFinancialImpact } from '@/lib/utils'
+import { formatCurrency, calculateRecurrenceRate, calculateFinancialImpact } from '@/lib/utils'
 
 interface ReportHTMLProps {
   ocorrencias: Ocorrencia[]
@@ -79,7 +79,6 @@ export function ReportHTML({ ocorrencias, filters }: ReportHTMLProps) {
       .reduce((acc, o) => acc + (o.valor || 0), 0),
     emAberto: ocorrencias.filter((o) => o.status === 'EM ABERTO').length,
     finalizadas: ocorrencias.filter((o) => o.status === 'FINALIZADO').length,
-    mttr: calculateMTTR(ocorrencias),
     taxaReincidencia: calculateRecurrenceRate(ocorrencias),
     impactoFinanceiro: calculateFinancialImpact(ocorrencias),
   }
@@ -594,11 +593,6 @@ export function ReportHTML({ ocorrencias, filters }: ReportHTMLProps) {
             <div className="stat-card-subvalue">Soma total</div>
           </div>
           <div className="stat-card">
-            <div className="stat-card-title">MTTR</div>
-            <div className="stat-card-value">{kpis.mttr}</div>
-            <div className="stat-card-subvalue">dias (tempo médio)</div>
-          </div>
-          <div className="stat-card">
             <div className="stat-card-title">Taxa de Reincidência</div>
             <div className="stat-card-value">{kpis.taxaReincidencia}%</div>
             <div className="stat-card-subvalue">{kpis.taxaReincidencia > 30 ? '⚠️ Alta' : '✅ Controlada'}</div>
@@ -875,7 +869,7 @@ export function ReportHTML({ ocorrencias, filters }: ReportHTMLProps) {
               <th>Cliente</th>
               <th>Valor</th>
               <th>Status</th>
-              <th>Prioridade</th>
+              <th>Reincidência</th>
             </tr>
           </thead>
           <tbody>
@@ -897,7 +891,7 @@ export function ReportHTML({ ocorrencias, filters }: ReportHTMLProps) {
                   <td>{(item.cliente || '-').substring(0, 30)}</td>
                   <td>{item.valor ? formatCurrency(item.valor) : '-'}</td>
                   <td>{item.status}</td>
-                  <td>{item.prioridade || '-'}</td>
+                  <td>{item.reincidencia || 'NÃO'}</td>
                 </tr>
               )
             })}

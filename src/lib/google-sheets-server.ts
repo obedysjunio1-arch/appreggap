@@ -29,8 +29,9 @@ const HEADERS = [
   'resultado',
   'tratativa',
   'status',
-  'prazo_dias',
-  'prioridade',
+  'reincidencia',
+  'nf_anterior',
+  'nf_substituta',
   'created_at',
   'updated_at',
 ]
@@ -83,8 +84,9 @@ function ocorrenciaToRow(ocorrencia: Ocorrencia): any[] {
     ocorrencia.resultado || '',
     ocorrencia.tratativa || '',
     ocorrencia.status || '',
-    ocorrencia.prazo_dias || '',
-    ocorrencia.prioridade || '',
+    ocorrencia.reincidencia || '',
+    ocorrencia.nf_anterior || '',
+    ocorrencia.nf_substituta || '',
     ocorrencia.data_criacao || new Date().toISOString(),
     new Date().toISOString(),
   ]

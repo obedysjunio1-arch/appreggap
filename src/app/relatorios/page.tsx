@@ -27,13 +27,20 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useToast } from '@/components/ui/use-toast'
-import { ocorrenciasApi, clientesApi } from '@/lib/supabase-client'
+import { 
+  ocorrenciasApi, 
+  clientesApi, 
+  setorApi, 
+  motivoApi, 
+  tipoOcorrenciaApi, 
+  tipoColaboradorApi 
+} from '@/lib/supabase-client'
 import { 
   formatCurrency, 
   formatDate, 
-  calculateMTTR, 
   calculateRecurrenceRate, 
-  calculateFinancialImpact 
+  calculateFinancialImpact,
+  getWeekComparison
 } from '@/lib/utils'
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -72,8 +79,9 @@ interface Ocorrencia {
   resultado?: string
   tratativa?: string
   status: string
-  prazo_dias?: number
-  prioridade?: string
+  reincidencia?: string
+  nf_anterior?: string
+  nf_substituta?: string
 }
 
 interface Cliente {
@@ -124,6 +132,13 @@ export default function RelatoriosPage() {
   const [ocorrencias, setOcorrencias] = useState<Ocorrencia[]>([])
   const [filteredOcorrencias, setFilteredOcorrencias] = useState<Ocorrencia[]>([])
   const [loading, setLoading] = useState(true)
+  
+  // Dados das tabelas de configuração para os filtros
+  const [setores, setSetores] = useState<string[]>([])
+  const [motivos, setMotivos] = useState<string[]>([])
+  const [tiposOcorrencia, setTiposOcorrencia] = useState<string[]>([])
+  const [tiposColaborador, setTiposColaborador] = useState<string[]>([])
+  const [clientes, setClientes] = useState<Cliente[]>([])
 
   // Filtros
   const [busca, setBusca] = useState('')
@@ -151,6 +166,28 @@ export default function RelatoriosPage() {
   const [selectedOcorrencia, setSelectedOcorrencia] = useState<Ocorrencia | null>(null)
   const [editFormData, setEditFormData] = useState<Partial<Ocorrencia>>({})
 
+  // Carregar dados das tabelas de configuração para os filtros
+  const fetchFilterData = useCallback(async () => {
+    try {
+      const [setoresData, motivosData, tiposOcorrenciaData, tiposColaboradorData, clientesData] = await Promise.all([
+        setorApi.getAll(),
+        motivoApi.getAll(),
+        tipoOcorrenciaApi.getAll(),
+        tipoColaboradorApi.getAll(),
+        clientesApi.getAll(),
+      ])
+
+      // Filtrar apenas os ativos e extrair os nomes
+      setSetores((setoresData || []).filter(s => s.ativo).map(s => s.nome))
+      setMotivos((motivosData || []).filter(m => m.ativo).map(m => m.nome))
+      setTiposOcorrencia((tiposOcorrenciaData || []).filter(t => t.ativo).map(t => t.nome))
+      setTiposColaborador((tiposColaboradorData || []).filter(t => t.ativo).map(t => t.nome))
+      setClientes(clientesData || [])
+    } catch (error) {
+      console.error('Erro ao carregar dados dos filtros:', error)
+    }
+  }, [])
+
   const fetchData = useCallback(async () => {
     try {
       const data = await ocorrenciasApi.getAll()
@@ -169,8 +206,19 @@ export default function RelatoriosPage() {
   }, [toast])
 
   useEffect(() => {
+    fetchFilterData()
     fetchData()
-  }, [fetchData])
+  }, [fetchFilterData, fetchData])
+
+  // Atualizar filtros quando a página receber foco (usuário voltou de outra tela)
+  useEffect(() => {
+    const handleFocus = () => {
+      fetchFilterData()
+    }
+    
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [fetchFilterData])
 
   const handleClearFilters = () => {
     setBusca('')
@@ -243,7 +291,7 @@ export default function RelatoriosPage() {
     const headers = [
       'Data', 'Setor', 'Tipo Colab', 'Tipo Ocorrência', 'Motivo',
       'Cliente', 'Rede', 'Cidade', 'UF', 'Vendedor', 'Valor',
-      'Status', 'Prioridade'
+      'Status', 'Reincidência'
     ]
 
     const rows = filteredOcorrencias.map(o => [
@@ -259,7 +307,7 @@ export default function RelatoriosPage() {
       o.vendedor || '',
       o.valor ? formatCurrency(o.valor) : '',
       o.status,
-      o.prioridade || '',
+      o.reincidencia || '',
     ])
 
     let csv = headers.join(',') + '\n'
@@ -280,10 +328,12 @@ export default function RelatoriosPage() {
   }
 
   const handleExportXLSX = () => {
-    const ws = XLSX.utils.json_to_sheet(filteredOcorrencias.map(o => ({
-      'Data': formatDate(o.data_ocorrencia),
+    // Preparar dados com todas as colunas
+    const data = filteredOcorrencias.map(o => ({
+      'Data Ocorrência': formatDate(o.data_ocorrencia),
+      'Data Criação': formatDate(o.data_criacao),
       'Setor': o.setor,
-      'Tipo Colab': o.tipo_colaborador.replace(/_/g, ' '),
+      'Tipo Colaborador': o.tipo_colaborador.replace(/_/g, ' '),
       'Tipo Ocorrência': o.tipo_ocorrencia.replace(/_/g, ' '),
       'Motivo': o.motivo.replace(/_/g, ' '),
       'Cliente': o.cliente || '',
@@ -293,17 +343,76 @@ export default function RelatoriosPage() {
       'Vendedor': o.vendedor || '',
       'Valor': o.valor || 0,
       'Status': o.status,
-      'Prioridade': o.prioridade || '',
-      'Detalhamento': o.detalhamento,
-    })))
+      'Reincidência': o.reincidencia || '',
+      'NF Anterior': o.nf_anterior || '',
+      'NF Substitua': o.nf_substituta || '',
+      'Detalhamento': o.detalhamento || '',
+      'Tratativa': o.tratativa || '',
+      'Resultado': o.resultado || '',
+    }))
 
+    const ws = XLSX.utils.json_to_sheet(data)
+
+    // Definir largura das colunas
+    const colWidths = [
+      { wch: 12 }, // Data Ocorrência
+      { wch: 12 }, // Data Criação
+      { wch: 15 }, // Setor
+      { wch: 18 }, // Tipo Colaborador
+      { wch: 18 }, // Tipo Ocorrência
+      { wch: 25 }, // Motivo
+      { wch: 20 }, // Cliente
+      { wch: 15 }, // Rede
+      { wch: 15 }, // Cidade
+      { wch: 5 },  // UF
+      { wch: 15 }, // Vendedor
+      { wch: 12 }, // Valor
+      { wch: 12 }, // Status
+      { wch: 12 }, // Reincidência
+      { wch: 15 }, // NF Anterior
+      { wch: 15 }, // NF Substitua
+      { wch: 40 }, // Detalhamento
+      { wch: 40 }, // Tratativa
+      { wch: 40 }, // Resultado
+    ]
+    ws['!cols'] = colWidths
+
+    // Formatar cabeçalho (linha 1) - verde com texto branco em negrito
+    const headerStyle = {
+      fill: { fgColor: { rgb: '073e29' } }, // Verde #073e29
+      font: { color: { rgb: 'FFFFFF' }, bold: true, sz: 11 },
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+      border: {
+        top: { style: 'thin', color: { rgb: '000000' } },
+        bottom: { style: 'thin', color: { rgb: '000000' } },
+        left: { style: 'thin', color: { rgb: '000000' } },
+        right: { style: 'thin', color: { rgb: '000000' } },
+      },
+    }
+
+    // Aplicar estilo ao cabeçalho
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const cellAddress = XLSX.utils.encode_cell({ r: 0, c: C })
+      if (!ws[cellAddress]) continue
+      ws[cellAddress].s = headerStyle
+    }
+
+    // Adicionar filtros automáticos (autofilter)
+    if (ws['!ref']) {
+      ws['!autofilter'] = { ref: ws['!ref'] }
+    }
+
+    // Criar workbook e adicionar worksheet
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Ocorrências')
+    
+    // Salvar arquivo
     XLSX.writeFile(wb, `relatorio-reggap-${new Date().toISOString().split('T')[0]}.xlsx`)
 
     toast({
       title: 'Relatório exportado',
-      description: 'O arquivo XLSX foi baixado com sucesso.',
+      description: 'O arquivo XLSX foi baixado com sucesso com formatação completa.',
     })
   }
 
@@ -321,9 +430,9 @@ export default function RelatoriosPage() {
         .reduce((acc, o) => acc + (o.valor || 0), 0),
       emAberto: filteredOcorrencias.filter((o) => o.status === 'EM ABERTO').length,
       finalizadas: filteredOcorrencias.filter((o) => o.status === 'FINALIZADO').length,
-      mttr: calculateMTTR(filteredOcorrencias),
       taxaReincidencia: calculateRecurrenceRate(filteredOcorrencias),
       impactoFinanceiro: calculateFinancialImpact(filteredOcorrencias),
+      comparativoSemanal: getWeekComparison(filteredOcorrencias),
     }
 
     // Top 10 Motivos
@@ -414,10 +523,10 @@ export default function RelatoriosPage() {
       .slice(0, 5)
       .map(([rede, count]) => ({ name: rede, value: count }))
 
-    // Evolução Temporal (por data de ocorrência)
+    // Evolução Temporal (por data de ocorrência) - formato DD/MM
     const porDataChart = filteredOcorrencias.reduce((acc, curr) => {
       const data = curr.data_ocorrencia
-        ? format(new Date(curr.data_ocorrencia), 'dd/MM/yyyy', { locale: ptBR })
+        ? format(new Date(curr.data_ocorrencia), 'dd/MM', { locale: ptBR })
         : 'Sem data'
       const valor = Number(curr.valor) || 0
       if (!acc[data]) {
@@ -1066,15 +1175,19 @@ export default function RelatoriosPage() {
     </div>
   </div>
   
-  <!-- MTTR e Taxa de Reincidência - Cards expandidos lateralmente -->
+  <!-- Comparativo Semanal e Taxa de Reincidência - Cards lado a lado -->
   <div class="kpi-grid-large">
     <div class="kpi-card-large">
       <div class="kpi-title-large">
-        <span>MTTR (Mean Time To Resolution)</span>
-        <span style="font-size: 16px;">⏱️</span>
+        <span>Comparativo Semanal</span>
+        <span style="font-size: 16px;">📊</span>
       </div>
-      <div class="kpi-value-large">${kpis.mttr} dias</div>
-      <div class="kpi-desc-large">Tempo médio de resolução | Baseado em ${kpis.finalizadas} ocorrência(s) finalizada(s)</div>
+      <div class="kpi-value-large" style="color: ${kpis.comparativoSemanal.isPositive ? '#059669' : '#dc2626'};">${kpis.comparativoSemanal.semanaAtual}</div>
+      <div class="kpi-desc-large" style="color: ${kpis.comparativoSemanal.isPositive ? '#065f46' : '#dc2626'};">
+        Semana Atual: ${kpis.comparativoSemanal.semanaAtual} ocorrências<br>
+        Semana Anterior: ${kpis.comparativoSemanal.semanaAnterior} ocorrências<br>
+        ${kpis.comparativoSemanal.isPositive ? '↑' : '↓'} ${Math.abs(kpis.comparativoSemanal.diferenca)} (${Math.abs(kpis.comparativoSemanal.percentual)}%)
+      </div>
     </div>
     <div class="kpi-card-large">
       <div class="kpi-title-large">
@@ -2257,37 +2370,7 @@ export default function RelatoriosPage() {
   const endIndex = startIndex + itemsPerPage
   const currentOcorrencias = filteredOcorrencias.slice(startIndex, endIndex)
 
-  const getPrioridadeBadge = (prioridade: string | undefined, ocorrencia: Ocorrencia) => {
-    if (!prioridade) {
-      return (
-        <button
-          onClick={() => handlePrioridadeClick(ocorrencia)}
-          className="px-2 py-1 rounded-full text-xs font-medium cursor-pointer transition-colors bg-gray-100 text-gray-800 hover:bg-gray-200"
-          title="Clique para definir prioridade"
-        >
-          Definir
-        </button>
-      )
-    }
-    const colors = {
-      'Baixa': 'bg-green-100 text-green-800 hover:bg-green-200',
-      'Média': 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200',
-      'Alta': 'bg-orange-100 text-orange-800 hover:bg-orange-200',
-      'Crítica': 'bg-red-100 text-red-800 hover:bg-red-200',
-    }
-    return (
-      <button
-        onClick={() => handlePrioridadeClick(ocorrencia)}
-        className={`px-2 py-1 rounded-full text-xs font-medium cursor-pointer transition-colors ${colors[prioridade as keyof typeof colors]}`}
-        title="Clique para alterar a prioridade"
-      >
-        {prioridade}
-      </button>
-    )
-  }
-
   const STATUS_OPTIONS = ['EM ABERTO', 'FINALIZADO']
-  const PRIORIDADE_OPTIONS = ['Baixa', 'Média', 'Alta', 'Crítica']
 
   const handleStatusClick = async (ocorrencia: Ocorrencia) => {
     const currentIndex = STATUS_OPTIONS.indexOf(ocorrencia.status)
@@ -2311,28 +2394,6 @@ export default function RelatoriosPage() {
     }
   }
 
-  const handlePrioridadeClick = async (ocorrencia: Ocorrencia) => {
-    const currentPrioridade = ocorrencia.prioridade || 'Baixa'
-    const currentIndex = PRIORIDADE_OPTIONS.indexOf(currentPrioridade)
-    const nextIndex = (currentIndex + 1) % PRIORIDADE_OPTIONS.length
-    const newPrioridade = PRIORIDADE_OPTIONS[nextIndex]
-    
-    try {
-      await ocorrenciasApi.update(ocorrencia.id!, { prioridade: newPrioridade })
-      toast({
-        title: 'Prioridade atualizada!',
-        description: `Prioridade alterada para ${newPrioridade}`,
-      })
-      await fetchData()
-    } catch (error) {
-      console.error('Erro ao atualizar prioridade:', error)
-      toast({
-        variant: 'destructive',
-        title: 'Erro ao atualizar',
-        description: 'Não foi possível atualizar a prioridade.',
-      })
-    }
-  }
 
   const getStatusBadge = (status: string, ocorrencia: Ocorrencia) => {
     const colors = {
@@ -2465,7 +2526,7 @@ export default function RelatoriosPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.setor))).map(s => (
+                    {setores.map(s => (
                       <SelectItem key={s} value={s}>{s}</SelectItem>
                     ))}
                   </SelectContent>
@@ -2479,7 +2540,7 @@ export default function RelatoriosPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.motivo))).map(m => (
+                    {motivos.map(m => (
                       <SelectItem key={m} value={m}>{m.replace(/_/g, ' ')}</SelectItem>
                     ))}
                   </SelectContent>
@@ -2493,29 +2554,9 @@ export default function RelatoriosPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.tipo_ocorrencia))).map(t => (
+                    {tiposOcorrencia.map(t => (
                       <SelectItem key={t} value={t}>{t.replace(/_/g, ' ')}</SelectItem>
                     ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Prioridade</Label>
-                <Select
-                  value="all"
-                  onValueChange={(value) => {
-                    // Implementar filtro de prioridade se necessário
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Todas" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todas</SelectItem>
-                    <SelectItem value="Baixa">Baixa</SelectItem>
-                    <SelectItem value="Média">Média</SelectItem>
-                    <SelectItem value="Alta">Alta</SelectItem>
-                    <SelectItem value="Crítica">Crítica</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -2569,7 +2610,7 @@ export default function RelatoriosPage() {
                     <th className="text-left p-3 text-sm font-semibold">Cliente</th>
                     <th className="text-left p-3 text-sm font-semibold">Valor</th>
                     <th className="text-left p-3 text-sm font-semibold">Status</th>
-                    <th className="text-left p-3 text-sm font-semibold">Prioridade</th>
+                    <th className="text-left p-3 text-sm font-semibold">Reincidência</th>
                     <th className="text-left p-3 text-sm font-semibold">Ações</th>
                   </tr>
                 </thead>
@@ -2583,7 +2624,15 @@ export default function RelatoriosPage() {
                       <td className="p-3 text-sm">{ocorrencia.cliente || '-'}</td>
                       <td className="p-3 text-sm">{ocorrencia.valor ? formatCurrency(ocorrencia.valor) : '-'}</td>
                       <td className="p-3 text-sm">{getStatusBadge(ocorrencia.status, ocorrencia)}</td>
-                      <td className="p-3 text-sm">{getPrioridadeBadge(ocorrencia.prioridade, ocorrencia)}</td>
+                      <td className="p-3 text-sm">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          ocorrencia.reincidencia === 'SIM' 
+                            ? 'bg-red-100 text-red-800' 
+                            : 'bg-green-100 text-green-800'
+                        }`}>
+                          {ocorrencia.reincidencia || 'NÃO'}
+                        </span>
+                      </td>
                       <td className="p-3 text-sm">
                         <div className="flex gap-2">
                           <Button
@@ -2708,14 +2757,28 @@ export default function RelatoriosPage() {
                       onChange={(e) => setEditFormData({ ...editFormData, valor: parseFloat(e.target.value) || 0 })}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label>Prazo (dias)</Label>
-                    <Input
-                      type="number"
-                      value={editFormData.prazo_dias || ''}
-                      onChange={(e) => setEditFormData({ ...editFormData, prazo_dias: parseInt(e.target.value) || undefined })}
-                    />
-                  </div>
+                  
+                  {/* Campos NF ANTERIOR e NF SUBSTITUTA - Aparecem apenas para REFATURAMENTO, CANCELAMENTO ou DEVOLUCAO TOTAL */}
+                  {['REFATURAMENTO', 'CANCELAMENTO', 'DEVOLUCAO TOTAL'].includes(editFormData.tipo_ocorrencia || '') && (
+                    <>
+                      <div className="space-y-2">
+                        <Label>NF ANTERIOR (Opcional)</Label>
+                        <Input
+                          placeholder="Número da nota fiscal anterior"
+                          value={editFormData.nf_anterior || ''}
+                          onChange={(e) => setEditFormData({ ...editFormData, nf_anterior: e.target.value.toUpperCase() })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>NF SUBSTITUTA (Opcional)</Label>
+                        <Input
+                          placeholder="Número da nota fiscal substituta"
+                          value={editFormData.nf_substituta || ''}
+                          onChange={(e) => setEditFormData({ ...editFormData, nf_substituta: e.target.value.toUpperCase() })}
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -2762,9 +2825,9 @@ export default function RelatoriosPage() {
                 </div>
               </div>
 
-              {/* Status e Prioridade */}
+              {/* Status e Reincidência */}
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold border-b pb-2">Status e Prioridade</h3>
+                <h3 className="text-lg font-semibold border-b pb-2">Status e Reincidência</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Status</Label>
@@ -2782,19 +2845,17 @@ export default function RelatoriosPage() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Prioridade</Label>
+                    <Label>Reincidência</Label>
                     <Select
-                      value={editFormData.prioridade || 'Média'}
-                      onValueChange={(value) => setEditFormData({ ...editFormData, prioridade: value })}
+                      value={editFormData.reincidencia || 'NÃO'}
+                      onValueChange={(value) => setEditFormData({ ...editFormData, reincidencia: value })}
                     >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="Baixa">Baixa</SelectItem>
-                        <SelectItem value="Média">Média</SelectItem>
-                        <SelectItem value="Alta">Alta</SelectItem>
-                        <SelectItem value="Crítica">Crítica</SelectItem>
+                        <SelectItem value="SIM">SIM</SelectItem>
+                        <SelectItem value="NÃO">NÃO</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

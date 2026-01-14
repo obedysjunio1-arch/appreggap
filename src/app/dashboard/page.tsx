@@ -18,14 +18,20 @@ import {
 } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useToast } from '@/components/ui/use-toast'
-import { ocorrenciasApi, clientesApi } from '@/lib/supabase-client'
+import { 
+  ocorrenciasApi, 
+  clientesApi, 
+  setorApi, 
+  motivoApi, 
+  tipoOcorrenciaApi, 
+  tipoColaboradorApi 
+} from '@/lib/supabase-client'
 import {
   formatCurrency,
   formatDate,
-  calculateMTTR,
   calculateRecurrenceRate,
   calculateFinancialImpact,
-  getSLAStatus,
+  getBrazilDateTime,
 } from '@/lib/utils'
 import {
   BarChart,
@@ -86,8 +92,9 @@ interface Ocorrencia {
   resultado?: string
   tratativa?: string
   status: string
-  prazo_dias?: number
-  prioridade?: string
+  reincidencia?: string
+  nf_anterior?: string
+  nf_substituta?: string
 }
 
 interface Cliente {
@@ -104,6 +111,13 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
+  
+  // Dados das tabelas de configuração para os filtros
+  const [setores, setSetores] = useState<string[]>([])
+  const [motivos, setMotivos] = useState<string[]>([])
+  const [tiposOcorrencia, setTiposOcorrencia] = useState<string[]>([])
+  const [tiposColaborador, setTiposColaborador] = useState<string[]>([])
+  const [clientes, setClientes] = useState<Cliente[]>([])
 
   // Filtros
   const [busca, setBusca] = useState('')
@@ -119,27 +133,49 @@ export default function Dashboard() {
   const [rede, setRede] = useState('')
   const [cidade, setCidade] = useState('')
   const [uf, setUf] = useState('')
+  
+  // Filtro de período para gráfico de evolução
+  const [filtroEvolucao, setFiltroEvolucao] = useState<string>('todo_periodo')
+
+  // Carregar dados das tabelas de configuração para os filtros
+  const fetchFilterData = useCallback(async () => {
+    try {
+      const [setoresData, motivosData, tiposOcorrenciaData, tiposColaboradorData, clientesData] = await Promise.all([
+        setorApi.getAll(),
+        motivoApi.getAll(),
+        tipoOcorrenciaApi.getAll(),
+        tipoColaboradorApi.getAll(),
+        clientesApi.getAll(),
+      ])
+
+      // Filtrar apenas os ativos e extrair os nomes
+      setSetores((setoresData || []).filter(s => s.ativo).map(s => s.nome))
+      setMotivos((motivosData || []).filter(m => m.ativo).map(m => m.nome))
+      setTiposOcorrencia((tiposOcorrenciaData || []).filter(t => t.ativo).map(t => t.nome))
+      setTiposColaborador((tiposColaboradorData || []).filter(t => t.ativo).map(t => t.nome))
+      setClientes(clientesData || [])
+    } catch (error) {
+      console.error('Erro ao carregar dados dos filtros:', error)
+    }
+  }, [])
 
   const fetchData = useCallback(async () => {
     try {
-      const [ocorrencasData, clientesData] = await Promise.all([
-        ocorrenciasApi.getAll({
-          busca,
-          periodo_inicio: periodoInicio,
-          periodo_fim: periodoFim,
-          setor,
-          motivo,
-          tipo_ocorrencia: tipoOcorrencia,
-          status,
-          tipo_colaborador: tipoColaborador,
-          vendedor,
-          cliente,
-          rede,
-          cidade,
-          uf,
-        }),
-        clientesApi.getAll(),
-      ])
+      const ocorrencasData = await ocorrenciasApi.getAll({
+        busca,
+        periodo_inicio: periodoInicio,
+        periodo_fim: periodoFim,
+        setor,
+        motivo,
+        tipo_ocorrencia: tipoOcorrencia,
+        status,
+        tipo_colaborador: tipoColaborador,
+        vendedor,
+        cliente,
+        rede,
+        cidade,
+        uf,
+      })
 
       setOcorrencias(ocorrencasData || [])
       setLoading(false)
@@ -155,12 +191,23 @@ export default function Dashboard() {
   }, [busca, periodoInicio, periodoFim, setor, motivo, tipoOcorrencia, status, tipoColaborador, vendedor, cliente, rede, cidade, uf, toast])
 
   useEffect(() => {
+    fetchFilterData()
     fetchData()
-  }, [fetchData])
+  }, [fetchFilterData, fetchData])
+
+  // Atualizar filtros quando a página receber foco (usuário voltou de outra tela)
+  useEffect(() => {
+    const handleFocus = () => {
+      fetchFilterData()
+    }
+    
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [fetchFilterData])
 
   const handleRefresh = async () => {
     setRefreshing(true)
-    await fetchData()
+    await Promise.all([fetchFilterData(), fetchData()])
     setRefreshing(false)
     toast({
       title: 'Dados atualizados',
@@ -188,6 +235,54 @@ export default function Dashboard() {
     })
   }
 
+  // Função para calcular comparativo semana atual vs semana anterior
+  const calcularComparativoSemanal = () => {
+    const now = getBrazilDateTime()
+    
+    // Semana atual (segunda a domingo)
+    const inicioSemanaAtual = new Date(now)
+    inicioSemanaAtual.setDate(now.getDate() - now.getDay() + 1) // Segunda-feira
+    inicioSemanaAtual.setHours(0, 0, 0, 0)
+    
+    const fimSemanaAtual = new Date(inicioSemanaAtual)
+    fimSemanaAtual.setDate(inicioSemanaAtual.getDate() + 6) // Domingo
+    fimSemanaAtual.setHours(23, 59, 59, 999)
+    
+    // Semana anterior
+    const inicioSemanaAnterior = new Date(inicioSemanaAtual)
+    inicioSemanaAnterior.setDate(inicioSemanaAtual.getDate() - 7)
+    
+    const fimSemanaAnterior = new Date(fimSemanaAtual)
+    fimSemanaAnterior.setDate(fimSemanaAtual.getDate() - 7)
+    
+    const semanaAtual = ocorrencias.filter(o => {
+      if (!o.data_ocorrencia) return false
+      const data = new Date(o.data_ocorrencia)
+      return data >= inicioSemanaAtual && data <= fimSemanaAtual
+    }).length
+    
+    const semanaAnterior = ocorrencias.filter(o => {
+      if (!o.data_ocorrencia) return false
+      const data = new Date(o.data_ocorrencia)
+      return data >= inicioSemanaAnterior && data <= fimSemanaAnterior
+    }).length
+    
+    const diferenca = semanaAtual - semanaAnterior
+    const percentual = semanaAnterior > 0 
+      ? Math.round((diferenca / semanaAnterior) * 100) 
+      : (semanaAtual > 0 ? 100 : 0)
+    
+    return {
+      semanaAtual,
+      semanaAnterior,
+      diferenca,
+      percentual,
+      isPositive: diferenca >= 0
+    }
+  }
+
+  const comparativoSemanal = calcularComparativoSemanal()
+
   // KPIs
   const kpis = {
     totalOcorrencias: ocorrencias.length,
@@ -201,7 +296,6 @@ export default function Dashboard() {
       .reduce((acc, o) => acc + (o.valor || 0), 0),
     emAberto: ocorrencias.filter(o => o.status === 'EM ABERTO').length,
     finalizadas: ocorrencias.filter(o => o.status === 'FINALIZADO').length,
-    mttr: calculateMTTR(ocorrencias),
     taxaReincidencia: calculateRecurrenceRate(ocorrencias),
     impactoFinanceiro: calculateFinancialImpact(ocorrencias),
   }
@@ -366,29 +460,123 @@ export default function Dashboard() {
     },
   }
 
-  // Evolução Temporal (por data de ocorrência) - Para AreaChart
-  const evolucaoTemporal = ocorrencias.reduce((acc, curr) => {
+  // Função para obter intervalo de datas baseado no filtro
+  const getDateRange = (filtro: string) => {
+    const now = getBrazilDateTime()
+    let inicio: Date, fim: Date
+    
+    switch (filtro) {
+      case 'hoje':
+        inicio = new Date(now)
+        inicio.setHours(0, 0, 0, 0)
+        fim = new Date(now)
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'ontem':
+        inicio = new Date(now)
+        inicio.setDate(now.getDate() - 1)
+        inicio.setHours(0, 0, 0, 0)
+        fim = new Date(inicio)
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'semana_atual':
+        inicio = new Date(now)
+        inicio.setDate(now.getDate() - now.getDay() + 1) // Segunda-feira
+        inicio.setHours(0, 0, 0, 0)
+        fim = new Date(inicio)
+        fim.setDate(inicio.getDate() + 6) // Domingo
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'semana_anterior':
+        inicio = new Date(now)
+        inicio.setDate(now.getDate() - now.getDay() - 6) // Segunda-feira da semana anterior
+        inicio.setHours(0, 0, 0, 0)
+        fim = new Date(inicio)
+        fim.setDate(inicio.getDate() + 6) // Domingo
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'mes_atual':
+        inicio = new Date(now.getFullYear(), now.getMonth(), 1)
+        fim = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'mes_anterior':
+        inicio = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+        fim = new Date(now.getFullYear(), now.getMonth(), 0)
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'trimestre_atual':
+        const trimestreAtual = Math.floor(now.getMonth() / 3)
+        inicio = new Date(now.getFullYear(), trimestreAtual * 3, 1)
+        fim = new Date(now.getFullYear(), (trimestreAtual + 1) * 3, 0)
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'trimestre_anterior':
+        const trimestreAnterior = Math.floor(now.getMonth() / 3) - 1
+        inicio = new Date(now.getFullYear(), trimestreAnterior * 3, 1)
+        fim = new Date(now.getFullYear(), (trimestreAnterior + 1) * 3, 0)
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'semestre_atual':
+        const semestreAtual = Math.floor(now.getMonth() / 6)
+        inicio = new Date(now.getFullYear(), semestreAtual * 6, 1)
+        fim = new Date(now.getFullYear(), (semestreAtual + 1) * 6, 0)
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'semestre_anterior':
+        const semestreAnterior = Math.floor(now.getMonth() / 6) - 1
+        inicio = new Date(now.getFullYear(), semestreAnterior * 6, 1)
+        fim = new Date(now.getFullYear(), (semestreAnterior + 1) * 6, 0)
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'ano_atual':
+        inicio = new Date(now.getFullYear(), 0, 1)
+        fim = new Date(now.getFullYear(), 11, 31)
+        fim.setHours(23, 59, 59, 999)
+        break
+      case 'ano_anterior':
+        inicio = new Date(now.getFullYear() - 1, 0, 1)
+        fim = new Date(now.getFullYear() - 1, 11, 31)
+        fim.setHours(23, 59, 59, 999)
+        break
+      default: // todo_periodo
+        return null
+    }
+    
+    return { inicio, fim }
+  }
+
+  // Evolução Temporal (por data de ocorrência) - Para AreaChart - MEDINDO POR QUANTIDADE
+  const dateRange = getDateRange(filtroEvolucao)
+  const ocorrenciasFiltradas = dateRange
+    ? ocorrencias.filter(o => {
+        if (!o.data_ocorrencia) return false
+        const data = new Date(o.data_ocorrencia)
+        return data >= dateRange.inicio && data <= dateRange.fim
+      })
+    : ocorrencias
+
+  const evolucaoTemporal = ocorrenciasFiltradas.reduce((acc, curr) => {
     const data = curr.data_ocorrencia
       ? (() => {
           try {
             const date = new Date(curr.data_ocorrencia)
             return date.toISOString().split('T')[0] // Formato YYYY-MM-DD
           } catch {
-            return formatDate(curr.data_ocorrencia)
+            return null
           }
         })()
       : null
     if (!data) return acc
-    const valor = Number(curr.valor) || 0
     if (!acc[data]) {
-      acc[data] = { count: 0, valor: 0 }
+      acc[data] = { count: 0 }
     }
     acc[data].count++
-    acc[data].valor += valor
     return acc
-  }, {} as Record<string, { count: number; valor: number }>)
+  }, {} as Record<string, { count: number }>)
+  
   const evolucaoTemporalList = Object.entries(evolucaoTemporal)
-    .map(([date, data]) => ({ date, valor: data.valor }))
+    .map(([date, data]) => ({ date, quantidade: data.count }))
     .sort((a, b) => {
       try {
         return new Date(a.date).getTime() - new Date(b.date).getTime()
@@ -398,8 +586,8 @@ export default function Dashboard() {
     })
   
   const evolucaoChartConfig: ChartConfig = {
-    valor: {
-      label: "Valor Total (R$)",
+    quantidade: {
+      label: "Quantidade de Registros",
       color: "#047857", // Verde escuro para contraste
     },
   }
@@ -491,6 +679,18 @@ export default function Dashboard() {
       icon: CheckCircle2,
       title: `Taxa de resolução`,
       description: `${percentualFinalizadas}% das ocorrências já foram finalizadas`,
+    })
+  }
+
+  if (topClientes.length > 0) {
+    const topCliente = topClientes[0]
+    const totalClientes = topClientes.reduce((acc, c) => acc + c.value, 0)
+    const percentual = Math.round((topCliente.value / totalClientes) * 100)
+    insights.push({
+      type: 'info',
+      icon: Activity,
+      title: `Cliente com mais ocorrências`,
+      description: `O cliente "${topCliente.name}" concentra ${percentual}% de todas as ocorrências (${topCliente.value} casos)`,
     })
   }
 
@@ -687,7 +887,7 @@ export default function Dashboard() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.setor))).map(s => (
+                    {setores.map(s => (
                       <SelectItem key={s} value={s}>{s}</SelectItem>
                     ))}
                   </SelectContent>
@@ -701,7 +901,7 @@ export default function Dashboard() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.motivo))).map(m => (
+                    {motivos.map(m => (
                       <SelectItem key={m} value={m}>{m}</SelectItem>
                     ))}
                   </SelectContent>
@@ -715,7 +915,7 @@ export default function Dashboard() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.tipo_ocorrencia))).map(t => (
+                    {tiposOcorrencia.map(t => (
                       <SelectItem key={t} value={t}>{t}</SelectItem>
                     ))}
                   </SelectContent>
@@ -742,7 +942,7 @@ export default function Dashboard() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.tipo_colaborador))).map(t => (
+                    {tiposColaborador.map(t => (
                       <SelectItem key={t} value={t}>{t}</SelectItem>
                     ))}
                   </SelectContent>
@@ -756,7 +956,7 @@ export default function Dashboard() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.vendedor).filter(Boolean))).map(v => (
+                    {Array.from(new Set(clientes.map(c => c.vendedor).filter(Boolean))).map(v => (
                       <SelectItem key={v} value={v!}>{v}</SelectItem>
                     ))}
                   </SelectContent>
@@ -770,8 +970,8 @@ export default function Dashboard() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.cliente).filter(Boolean))).map(c => (
-                      <SelectItem key={c} value={c!}>{c}</SelectItem>
+                    {clientes.map(c => (
+                      <SelectItem key={c.cliente} value={c.cliente}>{c.cliente}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -784,8 +984,22 @@ export default function Dashboard() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.rede).filter(Boolean))).map(r => (
+                    {Array.from(new Set(clientes.map(c => c.rede).filter(Boolean))).map(r => (
                       <SelectItem key={r} value={r!}>{r}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Cidade</Label>
+                <Select value={cidade || 'all'} onValueChange={(v) => setCidade(v === 'all' ? '' : v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Todas" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas</SelectItem>
+                    {Array.from(new Set(clientes.map(c => c.cidade).filter(Boolean))).map(c => (
+                      <SelectItem key={c} value={c!}>{c}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -794,11 +1008,11 @@ export default function Dashboard() {
                 <Label>UF</Label>
                 <Select value={uf || 'all'} onValueChange={(v) => setUf(v === 'all' ? '' : v)}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Todos" />
+                    <SelectValue placeholder="Todas" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Todos</SelectItem>
-                    {Array.from(new Set(ocorrencias.map(o => o.uf).filter(Boolean))).map(u => (
+                    <SelectItem value="all">Todas</SelectItem>
+                    {Array.from(new Set(clientes.map(c => c.uf).filter(Boolean))).map(u => (
                       <SelectItem key={u} value={u!}>{u}</SelectItem>
                     ))}
                   </SelectContent>
@@ -865,22 +1079,27 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* MTTR e Taxa de Reincidência - Cards expandidos lateralmente */}
+      {/* Comparativo Semanal e Taxa de Reincidência - Cards expandidos lateralmente */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card className="lg:col-span-1">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-base font-semibold">MTTR (Mean Time To Resolution)</CardTitle>
-            <Clock className="h-5 w-5 text-[#073e29] dark:text-green-400" />
+            <CardTitle className="text-base font-semibold">Comparativo Semanal</CardTitle>
+            <Activity className="h-5 w-5 text-[#073e29] dark:text-green-400" />
           </CardHeader>
           <CardContent>
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-4xl font-bold text-[#073e29] dark:text-green-400">{kpis.mttr} dias</div>
+                <div className={`text-4xl font-bold ${comparativoSemanal.isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {comparativoSemanal.semanaAtual}
+                </div>
                 <p className="text-sm text-muted-foreground mt-2">
-                  Tempo médio de resolução
+                  Semana Atual: {comparativoSemanal.semanaAtual} ocorrências
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Baseado em {kpis.finalizadas} ocorrência(s) finalizada(s)
+                  Semana Anterior: {comparativoSemanal.semanaAnterior} ocorrências
+                </p>
+                <p className={`text-xs font-semibold mt-2 ${comparativoSemanal.isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {comparativoSemanal.isPositive ? '↑' : '↓'} {Math.abs(comparativoSemanal.diferenca)} ({Math.abs(comparativoSemanal.percentual)}%)
                 </p>
               </div>
             </div>
@@ -902,7 +1121,7 @@ export default function Dashboard() {
                   {kpis.taxaReincidencia > 30 ? '⚠️ Alta - Requer atenção' : '✅ Controlada'}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Percentual de ocorrências repetidas
+                  Razão entre registros com Reincidência = Sim / Total de registros
                 </p>
               </div>
             </div>
@@ -1473,10 +1692,33 @@ export default function Dashboard() {
         <Card className="pt-0">
           <CardHeader className="flex items-center gap-2 space-y-0 border-b py-5 sm:flex-row">
             <div className="grid flex-1 gap-1">
-              <CardTitle>Evolução no Tempo (Valor)</CardTitle>
+              <CardTitle>Evolução no Tempo (Quantidade de Registros)</CardTitle>
               <CardDescription>
-                Evolução do valor total das ocorrências ao longo do tempo
+                Evolução da quantidade de ocorrências registradas ao longo do tempo
               </CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="filtro-evolucao" className="text-sm">Período:</Label>
+              <Select value={filtroEvolucao} onValueChange={setFiltroEvolucao}>
+                <SelectTrigger id="filtro-evolucao" className="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hoje">Hoje</SelectItem>
+                  <SelectItem value="ontem">Ontem</SelectItem>
+                  <SelectItem value="semana_atual">Semana Atual</SelectItem>
+                  <SelectItem value="semana_anterior">Semana Anterior</SelectItem>
+                  <SelectItem value="mes_atual">Mês Atual</SelectItem>
+                  <SelectItem value="mes_anterior">Mês Anterior</SelectItem>
+                  <SelectItem value="trimestre_atual">Trimestre Atual</SelectItem>
+                  <SelectItem value="trimestre_anterior">Trimestre Anterior</SelectItem>
+                  <SelectItem value="semestre_atual">Semestre Atual</SelectItem>
+                  <SelectItem value="semestre_anterior">Semestre Anterior</SelectItem>
+                  <SelectItem value="ano_atual">Ano Atual</SelectItem>
+                  <SelectItem value="ano_anterior">Ano Anterior</SelectItem>
+                  <SelectItem value="todo_periodo">Todo Período</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </CardHeader>
           <CardContent className="px-2 pt-4 sm:px-6 sm:pt-6">
@@ -1487,15 +1729,15 @@ export default function Dashboard() {
               >
                 <AreaChart data={evolucaoTemporalList} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
                   <defs>
-                    <linearGradient id="fillValor" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="fillQuantidade" x1="0" y1="0" x2="0" y2="1">
                       <stop
                         offset="5%"
-                        stopColor="var(--color-valor)"
+                        stopColor="var(--color-quantidade)"
                         stopOpacity={0.8}
                       />
                       <stop
                         offset="95%"
-                        stopColor="var(--color-valor)"
+                        stopColor="var(--color-quantidade)"
                         stopOpacity={0.1}
                       />
                     </linearGradient>
@@ -1522,7 +1764,7 @@ export default function Dashboard() {
                   />
                   <YAxis
                     tick={{ fontSize: 11, fill: '#1f2937' }}
-                    tickFormatter={(value) => `R$ ${(value / 1000).toFixed(0)}k`}
+                    tickFormatter={(value) => `${value}`}
                   />
                   <ChartTooltip
                     cursor={false}
@@ -1535,7 +1777,6 @@ export default function Dashboard() {
                               return date.toLocaleDateString("pt-BR", {
                                 day: "2-digit",
                                 month: "2-digit",
-                                year: "numeric",
                               })
                             }
                             return String(value)
@@ -1546,8 +1787,8 @@ export default function Dashboard() {
                         formatter={(value: any) => {
                           const numValue = typeof value === 'number' ? value : parseFloat(String(value))
                           return [
-                            `R$ ${numValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
-                            'Valor Total'
+                            `${numValue} registro(s)`,
+                            'Quantidade'
                           ]
                         }}
                         indicator="dot"
@@ -1555,25 +1796,25 @@ export default function Dashboard() {
                     }
                   />
                   <Area
-                    dataKey="valor"
+                    dataKey="quantidade"
                     type="natural"
-                    fill="url(#fillValor)"
-                    stroke="var(--color-valor)"
+                    fill="url(#fillQuantidade)"
+                    stroke="var(--color-quantidade)"
                     strokeWidth={2}
                     stackId="a"
                     dot={{ 
                       r: 4, 
-                      fill: "var(--color-valor)",
+                      fill: "var(--color-quantidade)",
                       stroke: "#fff",
                       strokeWidth: 2
                     }}
                     activeDot={{ 
                       r: 6, 
-                      fill: "var(--color-valor)",
+                      fill: "var(--color-quantidade)",
                       stroke: "#fff",
                       strokeWidth: 2
                     }}
-                    label={({ valor, date }: any) => {
+                    label={({ quantidade, date }: any) => {
                       // Mostrar valores apenas em alguns pontos para não poluir
                       const index = evolucaoTemporalList.findIndex((d: any) => d.date === date)
                       if (index % Math.ceil(evolucaoTemporalList.length / 8) === 0 || index === evolucaoTemporalList.length - 1) {
@@ -1586,7 +1827,7 @@ export default function Dashboard() {
                             fontSize={10}
                             fontWeight="bold"
                           >
-                            {`R$ ${(valor / 1000).toFixed(0)}k`}
+                            {quantidade}
                           </text>
                         )
                       }

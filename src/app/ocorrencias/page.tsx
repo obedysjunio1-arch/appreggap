@@ -18,8 +18,15 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ocorrenciasApi, clientesApi } from '@/lib/supabase-client'
-import { formatDate } from '@/lib/utils'
+import { 
+  ocorrenciasApi, 
+  clientesApi, 
+  setorApi, 
+  motivoApi, 
+  tipoOcorrenciaApi, 
+  tipoColaboradorApi 
+} from '@/lib/supabase-client'
+import { formatDate, getBrazilDateTime } from '@/lib/utils'
 import { Plus, Save, ArrowLeft } from 'lucide-react'
 
 interface Ocorrencia {
@@ -39,8 +46,9 @@ interface Ocorrencia {
   resultado?: string
   tratativa?: string
   status: string
-  prazo_dias?: number
-  prioridade?: string
+  reincidencia?: string
+  nf_anterior?: string
+  nf_substituta?: string
 }
 
 interface Cliente {
@@ -51,88 +59,67 @@ interface Cliente {
   vendedor: string
 }
 
-const SETORES = [
-  'QUALIDADE',
-  'COMERCIAL',
-  'TRANSPORTE',
-  'RECEBIMENTO',
-  'SEPARAÇÃO',
-  'ESTOQUE',
-  'ADMINISTRATIVO',
-]
-
-const TIPO_COLABORADOR = [
-  'COLAB_SEPARAÇÃO',
-  'COLAB_QUALIDADE',
-  'COLAB_TRANSPORTE',
-  'COLAB_RECEBIMENTO',
-  'COLAB_ESTOQUE',
-  'COLAB_ADM_LOGISTICA',
-  'COLAB_VENDEDOR',
-  'COLAB_PROMOTOR',
-  'COLAB_ADM_COMERCIAL',
-]
-
-const TIPO_OCORRENCIA = [
-  'DEVOLUCAO TOTAL',
-  'CANCELAMENTO',
-  'REFATURAMENTO',
-  'FALHA OPERACIONAL',
-  'FALHA COMERCIAL',
-  'FALHA DE PROCEDIMENTO',
-]
-
-const MOTIVOS = [
-  'ERRO DE DIGITAÇÃO',
-  'DESACORDO',
-  'SEM PEDIDO',
-  'ATRASO NO RESUMO ROTAS',
-  'ATRASO LIB. MAPA',
-  'ERRO DE ESTOQUE',
-  'ERRO NO RECEBIMENTO',
-  'DIVERG. DE CADASTRO',
-  'DIVERG. DE QUALIDADE',
-  'ERRO DE SEPARAÇÃO',
-  'FALHA NO REPASSE',
-  'FALHA NA CONFERENCIA',
-  'MOROSIDADE NA VALIDAÇÃO',
-  'MOROSIDADE NO LANÇAMENTO',
-  'FURO DE PROCEDIMENTO',
-  'FALHA DE COMUNICAÇÃO',
-]
-
 const STATUS = ['EM ABERTO', 'FINALIZADO']
 
-const PRIORIDADE = ['Baixa', 'Média', 'Alta', 'Crítica']
+const REINCIDENCIA = ['SIM', 'NÃO']
 
 export default function OcorrenciasPage() {
   const router = useRouter()
   const { toast } = useToast()
   const [clientes, setClientes] = useState<Cliente[]>([])
+  const [setores, setSetores] = useState<string[]>([])
+  const [motivos, setMotivos] = useState<string[]>([])
+  const [tiposOcorrencia, setTiposOcorrencia] = useState<string[]>([])
+  const [tiposColaborador, setTiposColaborador] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const [formData, setFormData] = useState<Ocorrencia>({
-    data_ocorrencia: new Date().toISOString().split('T')[0],
+    data_ocorrencia: (() => {
+      const now = getBrazilDateTime()
+      return now.toISOString().split('T')[0]
+    })(),
     setor: '',
     tipo_colaborador: '',
     tipo_ocorrencia: '',
     motivo: '',
     detalhamento: '',
     status: 'EM ABERTO',
-    prioridade: 'Média',
+    reincidencia: 'NÃO',
   })
 
   useEffect(() => {
-    loadClientes()
+    loadFilterData()
   }, [])
 
-  const loadClientes = async () => {
+  // Atualizar filtros quando a página receber foco
+  useEffect(() => {
+    const handleFocus = () => {
+      loadFilterData()
+    }
+    
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [])
+
+  const loadFilterData = async () => {
     try {
-      const data = await clientesApi.getAll()
-      setClientes(data || [])
+      const [setoresData, motivosData, tiposOcorrenciaData, tiposColaboradorData, clientesData] = await Promise.all([
+        setorApi.getAll(),
+        motivoApi.getAll(),
+        tipoOcorrenciaApi.getAll(),
+        tipoColaboradorApi.getAll(),
+        clientesApi.getAll(),
+      ])
+
+      // Filtrar apenas os ativos e extrair os nomes
+      setSetores((setoresData || []).filter(s => s.ativo).map(s => s.nome))
+      setMotivos((motivosData || []).filter(m => m.ativo).map(m => m.nome))
+      setTiposOcorrencia((tiposOcorrenciaData || []).filter(t => t.ativo).map(t => t.nome))
+      setTiposColaborador((tiposColaboradorData || []).filter(t => t.ativo).map(t => t.nome))
+      setClientes(clientesData || [])
     } catch (error) {
-      console.error('Erro ao carregar clientes:', error)
+      console.error('Erro ao carregar dados dos filtros:', error)
     }
   }
 
@@ -192,15 +179,18 @@ export default function OcorrenciasPage() {
       })
 
       // Reset form
+      const now = getBrazilDateTime()
       setFormData({
-        data_ocorrencia: new Date().toISOString().split('T')[0],
+        data_ocorrencia: now.toISOString().split('T')[0],
         setor: '',
         tipo_colaborador: '',
         tipo_ocorrencia: '',
         motivo: '',
         detalhamento: '',
         status: 'EM ABERTO',
-        prioridade: 'Média',
+        reincidencia: 'NÃO',
+        nf_anterior: undefined,
+        nf_substituta: undefined,
       })
     } catch (error) {
       console.error('Erro ao salvar ocorrência:', error)
@@ -272,7 +262,7 @@ export default function OcorrenciasPage() {
                       <SelectValue placeholder="Selecione" />
                     </SelectTrigger>
                     <SelectContent>
-                      {SETORES.map((setor) => (
+                      {setores.map((setor) => (
                         <SelectItem key={setor} value={setor}>
                           {setor}
                         </SelectItem>
@@ -294,7 +284,7 @@ export default function OcorrenciasPage() {
                       <SelectValue placeholder="Selecione" />
                     </SelectTrigger>
                     <SelectContent>
-                      {TIPO_COLABORADOR.map((tipo) => (
+                      {tiposColaborador.map((tipo) => (
                         <SelectItem key={tipo} value={tipo}>
                           {tipo.replace(/_/g, ' ')}
                         </SelectItem>
@@ -316,7 +306,7 @@ export default function OcorrenciasPage() {
                       <SelectValue placeholder="Selecione" />
                     </SelectTrigger>
                     <SelectContent>
-                      {TIPO_OCORRENCIA.map((tipo) => (
+                      {tiposOcorrencia.map((tipo) => (
                         <SelectItem key={tipo} value={tipo}>
                           {tipo.replace(/_/g, ' ')}
                         </SelectItem>
@@ -338,7 +328,7 @@ export default function OcorrenciasPage() {
                       <SelectValue placeholder="Selecione" />
                     </SelectTrigger>
                     <SelectContent>
-                      {MOTIVOS.map((motivo) => (
+                      {motivos.map((motivo) => (
                         <SelectItem key={motivo} value={motivo}>
                           {motivo.replace(/_/g, ' ')}
                         </SelectItem>
@@ -361,6 +351,30 @@ export default function OcorrenciasPage() {
                     <p className="text-xs text-destructive">Campo obrigatório para este tipo</p>
                   )}
                 </div>
+                
+                {/* Campos NF ANTERIOR e NF SUBSTITUTA - Aparecem apenas para REFATURAMENTO, CANCELAMENTO ou DEVOLUCAO TOTAL */}
+                {['REFATURAMENTO', 'CANCELAMENTO', 'DEVOLUCAO TOTAL'].includes(formData.tipo_ocorrencia) && (
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="nf_anterior">NF ANTERIOR (Opcional)</Label>
+                      <Input
+                        id="nf_anterior"
+                        placeholder="Número da nota fiscal anterior"
+                        value={formData.nf_anterior || ''}
+                        onChange={(e) => setFormData({ ...formData, nf_anterior: e.target.value.toUpperCase() })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="nf_substituta">NF SUBSTITUTA (Opcional)</Label>
+                      <Input
+                        id="nf_substituta"
+                        placeholder="Número da nota fiscal substituta"
+                        value={formData.nf_substituta || ''}
+                        onChange={(e) => setFormData({ ...formData, nf_substituta: e.target.value.toUpperCase() })}
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
@@ -492,10 +506,10 @@ export default function OcorrenciasPage() {
               </div>
             </div>
 
-            {/* Status e Prioridade */}
+            {/* Status */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Status e Prioridade</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <h3 className="text-lg font-semibold">Status</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="status">
                     Status <span className="text-destructive">*</span>
@@ -517,36 +531,30 @@ export default function OcorrenciasPage() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+            </div>
 
+            {/* Reincidência - Último campo */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold">Reincidência</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="prioridade">Prioridade</Label>
+                  <Label htmlFor="reincidencia">Reincidência</Label>
                   <Select
-                    value={formData.prioridade}
-                    onValueChange={(value) => setFormData({ ...formData, prioridade: value })}
+                    value={formData.reincidencia || 'NÃO'}
+                    onValueChange={(value) => setFormData({ ...formData, reincidencia: value })}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Selecione" />
                     </SelectTrigger>
                     <SelectContent>
-                      {PRIORIDADE.map((prioridade) => (
-                        <SelectItem key={prioridade} value={prioridade}>
-                          {prioridade}
+                      {REINCIDENCIA.map((reincidencia) => (
+                        <SelectItem key={reincidencia} value={reincidencia}>
+                          {reincidencia}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="prazo_dias">Prazo (dias)</Label>
-                  <Input
-                    id="prazo_dias"
-                    type="number"
-                    min="1"
-                    placeholder="Dias para resolução"
-                    value={formData.prazo_dias || ''}
-                    onChange={(e) => setFormData({ ...formData, prazo_dias: parseInt(e.target.value) || undefined })}
-                  />
                 </div>
               </div>
             </div>
