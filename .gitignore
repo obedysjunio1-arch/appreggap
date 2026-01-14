@@ -36,3 +36,20 @@ next-env.d.ts
 # logs
 logs
 *.log
+
+# Google Cloud Service Account credentials
+*-*.json
+*service-account*.json
+*credentials*.json
+reggap-*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!components.json
+!.eslintrc.json
+
+# Sensitive files
+*.pem
+*.key
+*credentials*
+*secret*
