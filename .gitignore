@@ -53,3 +53,32 @@ reggap-*.json
 *.key
 *credentials*
 *secret*
+
+# PWA generated files
+public/sw.js
+public/workbox-*.js
+public/*.map
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

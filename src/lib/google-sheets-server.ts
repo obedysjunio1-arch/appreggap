@@ -214,7 +214,7 @@ export async function exportAllToSheets(ocorrencias: Ocorrencia[]): Promise<void
     const rows = ocorrencias.map(ocorrenciaToRow)
 
     if (rows.length === 0) {
-      console.log('Nenhuma ocorrência para exportar')
+      // Nenhuma ocorrência para exportar
       return
     }
 
@@ -235,7 +235,7 @@ export async function exportAllToSheets(ocorrencias: Ocorrencia[]): Promise<void
       },
     })
 
-    console.log(`✅ ${rows.length} ocorrências exportadas para Google Sheets`)
+    // Sincronização concluída com sucesso
   } catch (error) {
     console.error('Erro ao exportar para Google Sheets:', error)
     throw error
@@ -270,7 +270,7 @@ export async function saveToSheets(ocorrencia: Ocorrencia): Promise<void> {
       },
     })
 
-    console.log(`✅ Ocorrência ${ocorrencia.id} salva no Google Sheets`)
+    // Ocorrência salva com sucesso
   } catch (error) {
     console.error('Erro ao salvar no Google Sheets:', error)
     throw error
@@ -297,7 +297,7 @@ export async function updateInSheets(ocorrencia: Ocorrencia): Promise<void> {
 
     if (!rowNumber) {
       // Se não encontrar, cria uma nova linha
-      console.log(`⚠️ Ocorrência ${ocorrencia.id} não encontrada, criando nova linha`)
+      // Ocorrência não encontrada, criando nova linha
       await saveToSheets(ocorrencia)
       return
     }
@@ -315,7 +315,7 @@ export async function updateInSheets(ocorrencia: Ocorrencia): Promise<void> {
       },
     })
 
-    console.log(`✅ Ocorrência ${ocorrencia.id} atualizada no Google Sheets (linha ${rowNumber})`)
+    // Ocorrência atualizada com sucesso
   } catch (error) {
     console.error('Erro ao atualizar no Google Sheets:', error)
     throw error
@@ -337,7 +337,7 @@ export async function deleteFromSheets(id: string): Promise<void> {
     const rowNumber = await findRowByID(id)
 
     if (!rowNumber) {
-      console.log(`⚠️ Ocorrência ${id} não encontrada no Google Sheets`)
+      // Ocorrência não encontrada no Google Sheets
       return
     }
 
@@ -360,7 +360,7 @@ export async function deleteFromSheets(id: string): Promise<void> {
       },
     })
 
-    console.log(`✅ Ocorrência ${id} removida do Google Sheets (linha ${rowNumber})`)
+    // Ocorrência removida com sucesso
   } catch (error) {
     console.error('Erro ao remover do Google Sheets:', error)
     throw error

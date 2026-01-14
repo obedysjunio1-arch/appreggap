@@ -6,7 +6,21 @@ const withPWA = require('next-pwa')({
   // Desabilitar PWA em produção na Vercel se necessário
   buildExcludes: [/app-manifest\.json$/],
   // Configurações para Vercel
-  runtimeCaching: [],
+  runtimeCaching: [
+    {
+      urlPattern: /^https?.*/,
+      handler: 'NetworkFirst',
+      options: {
+        cacheName: 'offlineCache',
+        expiration: {
+          maxEntries: 200,
+        },
+      },
+    },
+  ],
+  // Configurações adicionais para PWA
+  sw: 'sw.js',
+  publicExcludes: ['!robots.txt', '!sitemap.xml'],
 });
 
 /** @type {import('next').NextConfig} */
